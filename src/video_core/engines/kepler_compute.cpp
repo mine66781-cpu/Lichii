@@ -8,6 +8,7 @@
 #include <atomic>
 #include <bit>
 #include <bitset>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -974,6 +975,18 @@ bool KeplerCompute::ReplaceOcarinaMovieNetwork() {
         !(launch_description.const_buffer_enable_mask & 1)) {
         return false;
     }
+    // Only while a video plays: a decoder produced a picture in the last second. Gameplay has
+    // its own upsampling passes that the +0x58 anchor and the size test could otherwise match.
+    const s64 last_picture =
+        Tegra::g_nx2_last_video_picture_ns.load(std::memory_order_relaxed);
+    const s64 now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                           std::chrono::steady_clock::now().time_since_epoch())
+                           .count();
+    if (last_picture == 0 || now_ns - last_picture > 1'000'000'000) {
+        movie_network_input.reset();
+        movie_network_skip_remaining = 0;
+        return false;
+    }
     const auto upscale_pair = [](const std::optional<Texture::TICEntry>& from,
                                  const std::optional<Texture::TICEntry>& to) {
         if (!from || !to || from->Address() == 0 || to->Address() == 0 ||
@@ -1103,13 +1116,13 @@ bool KeplerCompute::ReplaceOcarinaMovieNetwork() {
         .src_y1 = static_cast<s32>(input.Height()),
     };
     const bool copied = rasterizer->AccelerateSurfaceCopy(*source, *destination, config);
-    static bool logged = false;
-    if (!std::exchange(logged, true) || !copied) {
+    static u64 replaced = 0;
+    if ((replaced++ % 600) == 0 || !copied) {
         LOG_INFO(HW_GPU,
                  "Ocarina of Time: movie network pass {:#x} replaced by an input copy {}x{} -> "
-                 "{}x{} ({}): {}",
+                 "{}x{} ({}): {} ({} replacements so far)",
                  program, input.Width(), input.Height(), output->Width(), output->Height(),
-                 decodes_srgb ? "sRGB" : "plain", copied ? "copied" : "copy failed");
+                 decodes_srgb ? "sRGB" : "plain", copied ? "copied" : "copy failed", replaced);
     }
     return copied;
 }

@@ -203,6 +203,7 @@ private:
     s64 native_wait_budget_us{8000};
     s64 native_wait_used_us{}; ///< Budget spent since the last 10 s log line.
     std::deque<std::pair<u64, std::unique_ptr<GraphicsPipeline>>> evicted_pipelines; ///< (tick, pipeline)
+    std::unordered_set<u64> evicted_hashes; ///< Key hashes of every evicted graphics pipeline
     std::unordered_set<u64> used_and_evicted; ///< Key hashes of pipelines used this session, evicted since
 
     ::Common::unordered_map<ComputePipelineCacheKey, ComputePipelineCacheEntry> compute_cache;

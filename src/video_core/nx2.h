@@ -21,6 +21,10 @@ namespace Tegra {
 // Ampere classes and the Turing+ macro ISA, which Eden's Maxwell engines don't implement.
 inline std::atomic<bool> g_nx2_ampere{false};
 
+/// steady_clock time (ns since its epoch) of the last video picture a Switch 2 decoder produced;
+/// 0 before any. Movie-only GPU workarounds check it so they stay out of gameplay.
+inline std::atomic<s64> g_nx2_last_video_picture_ns{0};
+
 // GPU VA that nx2:gpu GetVaRange and GetUserPartition report to NVN. The in-process
 // allocator hands out addresses in [Nx2GpuVaStart, Nx2GpuVaEnd). NvRm's AllocAsEx range
 // can be smaller; the GMMU page tables still have to cover this one.

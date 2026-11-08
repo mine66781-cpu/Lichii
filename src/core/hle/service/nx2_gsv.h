@@ -3179,6 +3179,13 @@ private:
             }
             lk.lock();
             m_decoded_frames += pictures.size();
+            if (!pictures.empty()) {
+                Tegra::g_nx2_last_video_picture_ns.store(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch())
+                        .count(),
+                    std::memory_order_relaxed);
+            }
             if (Nx2VideoTraceEnabled()) {
                 LOG_INFO(Service,
                          "nx2:vdec trace decode syncpoint={} codec={} open={} pts={} eos={} "

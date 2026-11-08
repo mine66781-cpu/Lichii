@@ -336,6 +336,8 @@ Shader::RuntimeInfo MakeRuntimeInfo(std::span<const Shader::IR::Program> program
 }
 
 std::array<std::atomic<std::chrono::nanoseconds::rep>, 2> runtime_spirv_ns{};
+/// Graphics pipelines built again at run time after EvictUnusedPipelines destroyed them.
+std::atomic<u32> runtime_rebuilt_after_eviction{};
 
 void AddRuntimeSpirvTime(size_t thread, std::chrono::steady_clock::time_point begin) {
     const auto elapsed = std::chrono::steady_clock::now() - begin;
@@ -1315,6 +1317,9 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipelineSlowPath() {
         ReportNewPipelineKey(graphics_key);
         pipeline = background_pipelines.Take(graphics_key);
         if (!pipeline) {
+            if (evicted_hashes.erase(graphics_key.Hash()) != 0) {
+                runtime_rebuilt_after_eviction.fetch_add(1, std::memory_order_relaxed);
+            }
             pipeline = CreateGraphicsPipeline();
         }
     }
@@ -1364,6 +1369,19 @@ void PipelineCache::EvictUnusedPipelines() {
     if (PreloadAllPipelines()) {
         return;
     }
+    // EDEN_NX2_PIPELINE_EVICT=0 keeps every built pipeline: an evicted one is translated again on
+    // the GPU thread when the game comes back to it (tens of ms each on AMD's driver, not 2-3 ms).
+    static const bool evict = [] {
+        const char* value = std::getenv("EDEN_NX2_PIPELINE_EVICT");
+        const bool enabled = value == nullptr || value[0] != '0';
+        if (!enabled) {
+            LOG_INFO(Render_Vulkan, "EDEN_NX2_PIPELINE_EVICT=0: unused pipelines are kept");
+        }
+        return enabled;
+    }();
+    if (!evict) {
+        return;
+    }
     // Each built pipeline holds ~0.45 MB of driver memory and none was ever destroyed, so it grew
     // with every place a session went (title 1: 1,500 on its title screen alone). One unused for
     // this long is destroyed; it takes 2-3 ms to build again from the driver's pipeline cache.
@@ -1397,6 +1415,7 @@ void PipelineCache::EvictUnusedPipelines() {
         if (used_this_session.erase(pipeline) != 0) {
             used_and_evicted.insert(it->first.Hash());
         }
+        evicted_hashes.insert(it->first.Hash());
         evicted_pipelines.emplace_back(tick, std::move(it->second));
         it = graphics_cache.erase(it);
         ++evicted;
@@ -1928,9 +1947,10 @@ void ReportRuntimePipeline(const char* kind, std::chrono::steady_clock::time_poi
         LOG_INFO(Render_Vulkan,
                  "Runtime pipelines in the last 10 s: {} built, {:.1f} ms on the GPU thread "
                  "({:.1f} ms of it graphics SPIR-V), {:.1f} ms graphics SPIR-V on workers, "
-                 "{:.1f} ms of draws held for unbuilt pipelines",
+                 "{:.1f} ms of draws held for unbuilt pipelines, {} rebuilt after eviction",
                  count, ms(total), ms(take(runtime_spirv_ns[0])), ms(take(runtime_spirv_ns[1])),
-                 ms(GraphicsPipeline::TakeHoldTime()));
+                 ms(GraphicsPipeline::TakeHoldTime()),
+                 runtime_rebuilt_after_eviction.exchange(0, std::memory_order_relaxed));
         total = {};
         count = 0;
         window = now;
