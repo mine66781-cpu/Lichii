@@ -681,9 +681,6 @@ bool KeplerCompute::DispatchNativeCompute(const NativeQmdScheduler::Descriptor& 
         dlss_depth.reset();
         (void)fe_upscale_jitter.Take();
     }
-    if (!dlss_chain.active && ReplaceOcarinaMovieNetwork()) {
-        return true;
-    }
     bool dispatched = true;
     // EXP10 (GpuSplit::BeginDispatchRecord): what the dispatch writes. A rejected program writes
     // nothing besides what its bindings marked before (recorded as they were marked).
@@ -699,6 +696,12 @@ bool KeplerCompute::DispatchNativeCompute(const NativeQmdScheduler::Descriptor& 
             split.FinishDispatch(!skipped, replaced);
         }
     };
+    if (bool copied = false; !dlss_chain.active && ReplaceOcarinaMovieNetwork(copied)) {
+        // A skipped network pass writes nothing; the copy writes the output image.
+        skipped = !copied;
+        replaced = copied;
+        return true;
+    }
     try {
         rasterizer->DispatchCompute();
     } catch (const VideoCommon::FireEmblemUpscale::DispatchReplaced&) {
@@ -1091,7 +1094,7 @@ std::pair<std::vector<u32>, std::vector<u32>> KeplerCompute::NativeImageHandles(
 // window; the pass that stores an image upscaling it is replaced by a plain copy and closes it.
 // The gameplay network (+0xc0 -> +0xd0) is left to BypassOotNetwork. EDEN_NX2_UPSCALE_REPLACE=0
 // turns this off.
-bool KeplerCompute::ReplaceOcarinaMovieNetwork() {
+bool KeplerCompute::ReplaceOcarinaMovieNetwork(bool& copied_out) {
     static const bool enabled = [] {
         const char* value = std::getenv("EDEN_NX2_UPSCALE_REPLACE");
         return value == nullptr || std::string_view{value} != "0";
@@ -1229,6 +1232,7 @@ bool KeplerCompute::ReplaceOcarinaMovieNetwork() {
         .src_y1 = static_cast<s32>(input.Height()),
     };
     const bool copied = rasterizer->AccelerateSurfaceCopy(*source, *destination, config);
+    copied_out = copied;
     static bool logged = false;
     if (!std::exchange(logged, true) || !copied) {
         LOG_INFO(HW_GPU,

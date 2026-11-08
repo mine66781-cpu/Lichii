@@ -308,7 +308,8 @@ private:
     std::pair<std::vector<u32>, std::vector<u32>> NativeImageHandles(GPUVAddr program);
     /// Ocarina of Time's movie network: true when this dispatch is skipped or replaced by a copy
     /// of the network's input.
-    bool ReplaceOcarinaMovieNetwork();
+    /// `copied_out` tells a replacement by a copy (true) from a skipped pass (false).
+    bool ReplaceOcarinaMovieNetwork(bool& copied_out);
     void RememberDlssMotionVectors();
     bool TryFireEmblemUpscale(bool allow_history = true);
     void CaptureFireEmblemJitter();
