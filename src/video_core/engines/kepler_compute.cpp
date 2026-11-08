@@ -13,8 +13,10 @@
 #include <fstream>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include "common/assert.h"
 #include "common/dkb_frame_trace.h"
 #include "common/logging.h"
@@ -570,6 +572,9 @@ bool KeplerCompute::DispatchNativeCompute(const NativeQmdScheduler::Descriptor& 
         dlss_depth.reset();
         (void)fe_upscale_jitter.Take();
     }
+    if (!dlss_chain.active && ReplaceOcarinaMovieNetwork()) {
+        return true;
+    }
     bool dispatched = true;
     try {
         rasterizer->DispatchCompute();
@@ -904,6 +909,209 @@ std::optional<Texture::TICEntry> KeplerCompute::ConstBuffer0Image(u32 offset) co
         return std::nullopt;
     }
     return GetTICEntry(tic_index);
+}
+
+std::pair<std::vector<u32>, std::vector<u32>> KeplerCompute::NativeImageHandles(GPUVAddr program) {
+    static std::unordered_map<GPUVAddr, std::pair<std::vector<u32>, std::vector<u32>>> cache;
+    if (const auto it = cache.find(program); it != cache.end()) {
+        return it->second;
+    }
+    std::pair<std::vector<u32>, std::vector<u32>> handles;
+    const auto add = [](std::vector<u32>& list, u32 offset) {
+        if (std::find(list.begin(), list.end(), offset) == list.end()) {
+            list.push_back(offset);
+        }
+    };
+    std::array<u32, 0x400> block{};
+    bool exited = false;
+    for (u64 offset = 0; offset < 0x40000 && !exited; offset += sizeof(block)) {
+        if (!memory_manager.IsFullyMappedRange(program + offset, sizeof(block))) {
+            break;
+        }
+        memory_manager.ReadBlock(program + offset, block.data(), sizeof(block));
+        for (size_t word = 0; word < block.size() && !exited; word += 4) {
+            const u32 opcode = block[word] & 0xfff;
+            const u32 binding = (block[word + 1] >> 22) & 0x1f;
+            const u32 handle = ((block[word + 1] >> 8) & 0x3fff) * 4;
+            switch (opcode) {
+            case 0xb60: // TEX, TLD, TLD4, TXQ forms with a bindless handle
+            case 0xb63:
+            case 0xb66:
+            case 0xb6d:
+                if (binding == 0) {
+                    add(handles.first, handle);
+                }
+                break;
+            case 0xb9b: // SUST
+                if (binding == 0) {
+                    add(handles.second, handle);
+                }
+                break;
+            case 0x94d: // EXIT, unconditional when guarded by PT
+                exited = ((block[word] >> 12) & 0xf) == 7;
+                break;
+            default:
+                break;
+            }
+        }
+    }
+    return cache.emplace(program, std::move(handles)).first->second;
+}
+
+// Ported from Eglantine 92f11919 ("replace Ocarina's movie network by an input copy"). The movie
+// network (title menu and cutscene videos) runs every frame; its matrix multiplies are emulated on
+// GPUs without cooperative matrices (AMD, Pascal), which held cutscenes at 26.8 FPS on an RX card.
+// A pass that reads one colour image at +0x58 and stores none retains that colour and opens a skip
+// window; the pass that stores an image upscaling it is replaced by a plain copy and closes it.
+// The gameplay network (+0xc0 -> +0xd0) is left to BypassOotNetwork. EDEN_NX2_UPSCALE_REPLACE=0
+// turns this off.
+bool KeplerCompute::ReplaceOcarinaMovieNetwork() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_UPSCALE_REPLACE");
+        return value == nullptr || std::string_view{value} != "0";
+    }();
+    if (!enabled || Settings::GetCurrentProgramID() != VideoCommon::OotNetwork::ProgramId ||
+        !(launch_description.const_buffer_enable_mask & 1)) {
+        return false;
+    }
+    const auto upscale_pair = [](const std::optional<Texture::TICEntry>& from,
+                                 const std::optional<Texture::TICEntry>& to) {
+        if (!from || !to || from->Address() == 0 || to->Address() == 0 ||
+            from->Address() == to->Address() || !from->IsBlockLinear() || !to->IsBlockLinear()) {
+            return false;
+        }
+        const u64 from_width = from->Width(), from_height = from->Height();
+        const u64 to_width = to->Width(), to_height = to->Height();
+        const u64 cross_a = to_width * from_height, cross_b = to_height * from_width;
+        return from_width >= 64 && to_width > from_width && to_width <= from_width * 4 &&
+               (cross_a > cross_b ? cross_a - cross_b : cross_b - cross_a) * 32 <= cross_a;
+    };
+    const GPUVAddr program = regs.code_loc.Address();
+    const auto [reads, stores] = NativeImageHandles(program);
+    std::optional<Texture::TICEntry> output;
+    if (movie_network_input) {
+        for (const u32 store : stores) {
+            if (auto image = ConstBuffer0Image(store); upscale_pair(movie_network_input, image)) {
+                output = image;
+                break;
+            }
+        }
+    }
+    if (!output) {
+        if (reads.size() == 1 && stores.empty() && reads.front() == 0x58) {
+            const auto input = ConstBuffer0Image(reads.front());
+            if (input && input->Address() != 0 && input->IsBlockLinear() && input->Width() >= 64 &&
+                input->Height() >= 64) {
+                movie_network_input = input;
+                movie_network_skip_remaining = 32;
+                return true;
+            }
+            return false;
+        }
+        if (movie_network_skip_remaining > 0) {
+            if (--movie_network_skip_remaining == 0) {
+                // No output pass matched: the frame lost the network's result. Stop retaining.
+                movie_network_input.reset();
+                static bool warned = false;
+                if (!std::exchange(warned, true)) {
+                    LOG_WARNING(HW_GPU, "Ocarina of Time: movie network output pass not found "
+                                        "within 32 dispatches");
+                }
+            }
+            return true;
+        }
+        return false;
+    }
+    const auto surface = [](const Texture::TICEntry& tic) -> std::optional<Fermi2D::Surface> {
+        using RTFormat = Tegra::RenderTargetFormat;
+        Fermi2D::Surface result{};
+        switch (tic.format) {
+        case Texture::TextureFormat::B10G11R11:
+            result.format = RTFormat::B10G11R11_FLOAT;
+            break;
+        case Texture::TextureFormat::R16G16B16A16:
+            result.format = RTFormat::R16G16B16A16_FLOAT;
+            break;
+        case Texture::TextureFormat::A8B8G8R8:
+            result.format = RTFormat::A8B8G8R8_UNORM;
+            break;
+        case Texture::TextureFormat::A2B10G10R10:
+            result.format = RTFormat::A2B10G10R10_UNORM;
+            break;
+        default:
+            return std::nullopt;
+        }
+        result.linear = Fermi2D::MemoryLayout::BlockLinear;
+        result.block_width.Assign(tic.block_width);
+        result.block_height.Assign(tic.block_height);
+        result.block_depth.Assign(tic.block_depth);
+        result.depth = 1;
+        result.width = tic.Width();
+        result.height = tic.Height();
+        result.addr_upper = static_cast<u32>(tic.Address() >> 32);
+        result.addr_lower = static_cast<u32>(tic.Address());
+        return result;
+    };
+    const auto input = *movie_network_input;
+    movie_network_input.reset();
+    movie_network_skip_remaining = 0;
+    const auto source = surface(input);
+    const auto destination = surface(*output);
+    if (!source || !destination) {
+        static bool warned = false;
+        if (!std::exchange(warned, true)) {
+            LOG_WARNING(HW_GPU, "Ocarina of Time: movie network images have unexpected formats "
+                                "({} -> {}); not replaced",
+                        static_cast<u32>(input.format.Value()),
+                        static_cast<u32>(output->format.Value()));
+        }
+        return false;
+    }
+    // The movie network decodes sRGB itself: keep that when the output pass has its constants.
+    static std::unordered_map<GPUVAddr, bool> srgb_programs;
+    auto [it, inserted] = srgb_programs.try_emplace(program, false);
+    if (inserted) {
+        std::array<u32, 0x400> block{};
+        bool threshold = false, exponent = false;
+        for (u64 offset = 0; offset < 0x20000 && !(threshold && exponent);
+             offset += sizeof(block)) {
+            if (!memory_manager.IsFullyMappedRange(program + offset, sizeof(block))) {
+                break;
+            }
+            memory_manager.ReadBlock(program + offset, block.data(), sizeof(block));
+            for (size_t word = 0; word < block.size(); word += 4) {
+                const u32 opcode = block[word] & 0xfff;
+                threshold |= opcode == 0x434 && block[word + 1] == 0x292d292d;
+                exponent |= opcode == 0x832 && block[word + 1] == 0x40cc40cc;
+            }
+        }
+        it->second = threshold && exponent;
+    }
+    const bool decodes_srgb = it->second;
+    const Fermi2D::Config config{
+        .operation = decodes_srgb ? Fermi2D::Operation::SrcCopySrgbToLinear
+                                  : Fermi2D::Operation::SrcCopy,
+        .filter = Fermi2D::Filter::Bilinear,
+        .must_accelerate = true,
+        .dst_x0 = 0,
+        .dst_y0 = 0,
+        .dst_x1 = static_cast<s32>(output->Width()),
+        .dst_y1 = static_cast<s32>(output->Height()),
+        .src_x0 = 0,
+        .src_y0 = 0,
+        .src_x1 = static_cast<s32>(input.Width()),
+        .src_y1 = static_cast<s32>(input.Height()),
+    };
+    const bool copied = rasterizer->AccelerateSurfaceCopy(*source, *destination, config);
+    static bool logged = false;
+    if (!std::exchange(logged, true) || !copied) {
+        LOG_INFO(HW_GPU,
+                 "Ocarina of Time: movie network pass {:#x} replaced by an input copy {}x{} -> "
+                 "{}x{} ({}): {}",
+                 program, input.Width(), input.Height(), output->Width(), output->Height(),
+                 decodes_srgb ? "sRGB" : "plain", copied ? "copied" : "copy failed");
+    }
+    return copied;
 }
 
 bool KeplerCompute::BypassOotNetwork(u64 program_id, u64 native_key) {

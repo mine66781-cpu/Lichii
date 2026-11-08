@@ -285,6 +285,11 @@ private:
     void DescribeNativeResources(const NativeQmdScheduler::Descriptor& qmd);
     /// Texture descriptor that the handle at `offset` in constant buffer 0 selects.
     std::optional<Texture::TICEntry> ConstBuffer0Image(u32 offset) const;
+    /// Constant buffer 0 offsets of the image handles a native program samples and stores to.
+    std::pair<std::vector<u32>, std::vector<u32>> NativeImageHandles(GPUVAddr program);
+    /// Ocarina of Time's movie network: true when this dispatch is skipped or replaced by a copy
+    /// of the network's input.
+    bool ReplaceOcarinaMovieNetwork();
     void RememberDlssMotionVectors();
     bool TryFireEmblemUpscale(bool allow_history = true);
     void CaptureFireEmblemJitter();
@@ -292,6 +297,14 @@ private:
     void CheckDlssNetwork();
     [[nodiscard]] VideoCore::GameDlssReason GameDlssBlocker() const;
     void UpdateGameDlssStatus(bool complete, VideoCore::GameDlssReason blocker);
+
+    /// Ocarina of Time's movie network: a pass that reads one colour image and stores none
+    /// retains its input here; the pass that stores an image upscaling it is replaced by a plain
+    /// copy. Cleared after the copy.
+    std::optional<Texture::TICEntry> movie_network_input;
+    /// Native dispatches left to skip while a retained movie network is being replaced (bounded,
+    /// so a non-network pass cannot silence the engine forever).
+    u32 movie_network_skip_remaining{};
 
     /// This frame's DLSS evaluation (Fortune's Weave): whether its passes all ran, and whether
     /// the game's own network output is shown instead of the replacement upscale.
