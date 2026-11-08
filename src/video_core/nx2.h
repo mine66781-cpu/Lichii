@@ -20,6 +20,10 @@ namespace Tegra {
 // Ampere classes and the Turing+ macro ISA, which Eden's Maxwell engines don't implement.
 inline std::atomic<bool> g_nx2_ampere{false};
 
+/// steady_clock time (ns since its epoch) of the last video picture a Switch 2 decoder produced;
+/// 0 before any. Movie-only GPU workarounds check it so they stay out of gameplay.
+inline std::atomic<s64> g_nx2_last_video_picture_ns{0};
+
 // Device pages the GPU has written through the buffer cache (shader stores, copies), ever. Title 1
 // runs command lists the GPU writes each frame (20-byte entries its culling fills in); read
 // without a flush they are stale and the draws behind them (trees) go missing. The bits never
