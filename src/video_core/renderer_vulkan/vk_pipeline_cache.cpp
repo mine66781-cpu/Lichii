@@ -1369,16 +1369,13 @@ void PipelineCache::EvictUnusedPipelines() {
     if (PreloadAllPipelines()) {
         return;
     }
-    // EDEN_NX2_PIPELINE_EVICT=0 keeps every built pipeline: an evicted one is translated again on
-    // the GPU thread when the game comes back to it (tens of ms each on AMD's driver, not 2-3 ms).
-    static const bool evict = [] {
-        const char* value = std::getenv("EDEN_NX2_PIPELINE_EVICT");
-        const bool enabled = value == nullptr || value[0] != '0';
-        if (!enabled) {
-            LOG_INFO(Render_Vulkan, "EDEN_NX2_PIPELINE_EVICT=0: unused pipelines are kept");
-        }
-        return enabled;
-    }();
+    // Switch 2 titles keep their pipelines (as in Eglantine 0ba4606e): an evicted one is translated
+    // again on the GPU thread when the game comes back to it, tens of ms each on AMD's driver. In
+    // an Ocarina session 1,600 were evicted, then up to 4.1 s per 10 s went to building pipelines
+    // on the GPU thread. EDEN_NX2_PIPELINE_EVICT=1 evicts anyway, =0 never evicts.
+    static const char* const evict_setting = std::getenv("EDEN_NX2_PIPELINE_EVICT");
+    const bool evict = evict_setting != nullptr ? evict_setting[0] != '0'
+                                                : !Settings::CurrentProgramIsSwitch2();
     if (!evict) {
         return;
     }

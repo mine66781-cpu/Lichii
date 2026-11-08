@@ -29,9 +29,9 @@ EDEN_NX2_FENCE_BATCH=1
 # Ocarina of Time with =0 (or =2): 30.9 fps against 38.9 unset, same spot and settings.
 #EDEN_NX2_FRAMES_AHEAD=1
 
-# Keep every built graphics pipeline instead of destroying the ones unused for 9000 frames. An
-# evicted pipeline is translated again on the GPU thread when the game returns to it (a stutter).
-#EDEN_NX2_PIPELINE_EVICT=0
+# Destroy graphics pipelines unused for 9000 frames (=1) or never (=0). Unset: never for Switch 2
+# titles, whose evicted pipelines are translated again on the GPU thread when the game returns.
+#EDEN_NX2_PIPELINE_EVICT=1
 
 # --- Workarounds / Debug ---
 # Terrain/indirect drawing fix for Donkey Kong Bananza: enabled by default. Set to 0 only to leave to GPU.
