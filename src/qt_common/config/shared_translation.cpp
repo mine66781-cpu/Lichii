@@ -303,8 +303,10 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
               "does when its graphics pipeline is still building.\n"
               "Wait stalls the GPU until the pipeline is ready (no missing effects, but long "
               "stalls on new content). Skip drops the draw, which can leave an effect missing for "
-              "a few frames. Bounded waits up to the time below per frame, then skips. The "
-              "EDEN_NX2_ASYNC_DISCARD=1 environment variable still forces Skip."));
+              "a few frames. Bounded waits up to the time below per frame, then skips. Auto uses "
+              "Bounded on AMD's proprietary driver, whose pipeline builds can take seconds, and "
+              "Wait elsewhere. The EDEN_NX2_ASYNC_DISCARD=1 environment variable still forces "
+              "Skip."));
     INSERT(Settings, native_pipeline_wait_ms, tr("Pipeline wait per frame (ms):"),
            tr("Used by the Bounded mode: the most time per frame that Switch 2 draws may wait in "
               "total for pipelines that are still building. Once spent, the remaining unbuilt "
@@ -703,6 +705,7 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
                               PAIR(NativeAsyncDraws, Wait, tr("Wait")),
                               PAIR(NativeAsyncDraws, Bounded, tr("Bounded wait")),
                               PAIR(NativeAsyncDraws, Skip, tr("Skip")),
+                              PAIR(NativeAsyncDraws, Auto, tr("Auto")),
                           }});
     translations->insert({Settings::EnumMetadata<Settings::CpuClock>::Index(),
                           {

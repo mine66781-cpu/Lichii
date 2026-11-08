@@ -31,6 +31,13 @@ constexpr bool CanDiscardPendingDraw(bool native, bool depth_enabled, u32 index_
 /// How a native draw with an unbuilt pipeline is handled (the native_async_draws setting).
 enum class NativePendingMode { Wait, Bounded, Skip };
 
+/// The mode the Auto setting resolves to. AMD's proprietary driver took a median 116 ms and up to
+/// 7.3 s per graphics pipeline in Ocarina of Time on an RX card, and Wait froze the game for each.
+/// @param slow_pipeline_builds The driver is known for slow pipeline builds.
+constexpr NativePendingMode AutoNativePendingMode(bool slow_pipeline_builds) {
+    return slow_pipeline_builds ? NativePendingMode::Bounded : NativePendingMode::Wait;
+}
+
 /// What to do with a native draw whose pipeline is still building.
 enum class NativeDrawAction {
     Wait,      ///< Use the pipeline; the draw waits for the build.

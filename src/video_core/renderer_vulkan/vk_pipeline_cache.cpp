@@ -460,6 +460,7 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
       use_asynchronous_shaders{Settings::values.use_asynchronous_shaders.GetValue()},
       use_vulkan_pipeline_cache{Settings::values.use_vulkan_driver_pipeline_cache.GetValue() &&
                                 !DriverCachesPipelines(device_)},
+      slow_pipeline_builds{device_.GetDriverID() == VK_DRIVER_ID_AMD_PROPRIETARY},
       num_pipeline_workers{device.HasBrokenParallelShaderCompiling() ? 1ULL
                                                                      : GetTotalPipelineWorkers()},
       emission_budget{num_pipeline_workers},
@@ -1420,6 +1421,13 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) noexc
         return pipeline;
     }
     if (!use_asynchronous_shaders) {
+        static bool warned = false;
+        if (!warned && maxwell3d->GetNativeMacroEngine().native_turing) {
+            warned = true;
+            LOG_WARNING(Render_Vulkan,
+                        "Asynchronous shaders are off: Switch 2 draws wait for every pipeline "
+                        "build (stutters and freezes on new content)");
+        }
         return pipeline;
     }
     // EDEN_NX2_ASYNC_DISCARD=1: skip native draws whose pipeline is still building instead of
@@ -1444,6 +1452,9 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) noexc
             break;
         case Settings::NativeAsyncDraws::Skip:
             mode = NativePendingMode::Skip;
+            break;
+        case Settings::NativeAsyncDraws::Auto:
+            mode = AutoNativePendingMode(slow_pipeline_builds);
             break;
         default:
             break;

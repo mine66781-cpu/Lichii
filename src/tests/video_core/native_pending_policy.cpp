@@ -4,6 +4,7 @@
 
 #include "video_core/renderer_vulkan/async_draw_policy.h"
 
+using Vulkan::AutoNativePendingMode;
 using Vulkan::DecideNativePending;
 using Vulkan::NativeDrawAction;
 using Vulkan::NativePendingMode;
@@ -30,4 +31,9 @@ TEST_CASE("Bounded mode still waits fully for draws that cannot be skipped",
     REQUIRE(DecideNativePending(NativePendingMode::Bounded, false, 8000) ==
             NativeDrawAction::Wait);
     REQUIRE(DecideNativePending(NativePendingMode::Bounded, false, 0) == NativeDrawAction::Wait);
+}
+
+TEST_CASE("Auto mode bounds waits only on slow pipeline drivers", "[video_core][native_pending]") {
+    REQUIRE(AutoNativePendingMode(true) == NativePendingMode::Bounded);
+    REQUIRE(AutoNativePendingMode(false) == NativePendingMode::Wait);
 }
